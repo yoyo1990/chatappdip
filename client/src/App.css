@@ -1,110 +1,167 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
-import io from 'socket.io-client';
-import axios from 'axios';
-import './App.css';
-
-function App() {
-  const [messages, setMessages] = useState([]);
-  const [messageInput, setMessageInput] = useState('');
-  const [username, setUsername] = useState('');
-  const messagesEndRef = useRef(null);
-
-  // הגדרת URL של הבקאנד באופן דינמי
-  // אם משתנה הסביבה REACT_APP_BACKEND_URL קיים (ב-Render), נשתמש בו.
-  // אחרת (בפיתוח מקומי), נחזור ל-localhost:5000.
-  const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5000';
-
-  // יצירת חיבור Socket.IO
-  const socket = io(backendUrl);
-
-  useEffect(() => {
-    // טעינת היסטוריית הודעות מהשרת REST API
-    axios.get(`${backendUrl}/messages`)
-      .then(response => {
-        setMessages(response.data);
-      })
-      .catch(error => {
-        console.error('Error fetching messages:', error);
-      });
-
-    // האזנה להודעות חדשות מ-Socket.IO
-    socket.on('chat message', (msg) => {
-      setMessages((prevMessages) => [...prevMessages, msg]);
-    });
-
-    // האזנה להיסטוריית הודעות שהשרת שולח בהתחברות (בנוסף ל-REST API)
-    socket.on('history', (historyMessages) => {
-      // אם אנחנו רוצים לאחד את ההיסטוריה מה-DB המרוחק עם זו שב-Socket.IO
-      // עבור הדמו הזה, נסתמך בעיקר על ה-REST API לטעינה ראשונית.
-      // אם השרת In-Memory, ה-history הזה יהיה ריק בכל מקרה.
-      // setMessages((prevMessages) => [...prevMessages, ...historyMessages]);
-    });
-
-    // ניקוי כאשר הקומפוננטה נטענת מחדש או נעלמת
-    return () => {
-      socket.off('chat message');
-      socket.off('history');
-      socket.disconnect(); // ניתוק מהסוקט כאשר הקומפוננטה עוזבת
-    };
-  }, [backendUrl]); // הוספת backendUrl כתלות כדי שהאפקט יופעל מחדש אם ה-URL משתנה (לא צפוי, אבל מומלץ)
-
-
-  // גלילה אוטומטית לתחתית הצ'אט
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  const handleSendMessage = (e) => {
-    e.preventDefault();
-    if (messageInput.trim() && username.trim()) {
-      const messageData = {
-        username: username,
-        message: messageInput.trim(),
-      };
-      socket.emit('chat message', messageData);
-      setMessageInput('');
-    } else {
-      alert('Please enter your username and a message.');
-    }
-  };
-
-  return (
-    <div className="App">
-      <header className="App-header">
-        <h1>Real-time Chat</h1>
-      </header>
-      <div className="chat-container">
-        <div className="messages-list">
-          {messages.map((msg, index) => (
-            <div key={index} className={`message ${msg.username === username ? 'my-message' : ''}`}>
-              <span className="username">{msg.username}:</span> {msg.message}
-              <span className="timestamp">{new Date(msg.timestamp).toLocaleTimeString()}</span>
-            </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
-        <form onSubmit={handleSendMessage} className="message-form">
-          <input
-            type="text"
-            placeholder="Your username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            className="username-input"
-            required
-          />
-          <input
-            type="text"
-            placeholder="Type a message..."
-            value={messageInput}
-            onChange={(e) => setMessageInput(e.target.value)}
-            className="message-input"
-            required
-          />
-          <button type="submit" className="send-button">Send</button>
-        </form>
-      </div>
-    </div>
-  );
+﻿/* כללי עיצוב בסיסיים */
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f0f2f5; /* צבע רקע בהיר לכל הדף */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh; /* ודא שהאפליקציה תופסת את כל גובה המסך */
 }
 
-export default App;
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+/* עיצוב כללי לאפליקציה */
+.App {
+  text-align: center;
+  background-color: #ffffff; /* רקע לבן לאפליקציית הצ'אט עצמה */
+  border-radius: 8px; /* פינות מעוגלות */
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); /* צל עדין */
+  width: 90%;
+  max-width: 600px;
+  display: flex;
+  flex-direction: column;
+  height: 80vh; /* גובה הצ'אט באחוזים מגובה המסך */
+  overflow: hidden; /* הסתרת תוכן שגולש */
+}
+
+/* עיצוב הכותרת */
+.App-header {
+  background-color: #007bff; /* כחול יפה לכותרת */
+  padding: 20px;
+  color: white;
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+}
+
+.App-header h1 {
+  margin: 0;
+  font-size: 1.8em;
+}
+
+/* עיצוב מיכל הצ'אט הראשי */
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  padding: 20px;
+  overflow: hidden;
+}
+
+/* רשימת ההודעות */
+.messages-list {
+  flex-grow: 1;
+  overflow-y: auto; /* גלילה רק באזור ההודעות */
+  padding-right: 10px; /* רווח קטן לגלילה */
+  margin-bottom: 10px;
+}
+
+/* עיצוב הודעה בודדת */
+.message {
+  background-color: #e0e0e0;
+  padding: 10px 15px;
+  border-radius: 18px;
+  margin-bottom: 8px;
+  max-width: 80%;
+  text-align: left;
+  word-wrap: break-word; /* שבירת מילים ארוכות */
+}
+
+.message .username {
+  font-weight: bold;
+  color: #0056b3; /* כחול כהה יותר לשם המשתמש */
+}
+
+.message .timestamp {
+  display: block;
+  font-size: 0.75em;
+  color: #666;
+  margin-top: 4px;
+  text-align: right;
+}
+
+/* עיצוב ההודעות שלי */
+.my-message {
+  background-color: #d1e7dd; /* ירוק בהיר יותר להודעות שלי */
+  margin-left: auto; /* יישור לימין */
+  text-align: right;
+}
+
+.my-message .username {
+  color: #008800; /* ירוק כהה לשם המשתמש בהודעות שלי */
+}
+
+/* טופס שליחת הודעה */
+.message-form {
+  display: flex;
+  padding-top: 10px;
+  border-top: 1px solid #eee;
+}
+
+.username-input,
+.message-input {
+  flex-grow: 1;
+  padding: 10px 15px;
+  border: 1px solid #ccc;
+  border-radius: 20px;
+  margin-right: 10px;
+  font-size: 1em;
+}
+
+.username-input {
+    flex-grow: 0.5; /* פחות מקום לשם המשתמש */
+    margin-right: 15px;
+}
+
+
+.send-button {
+  background-color: #28a745; /* כפתור ירוק */
+  color: white;
+  border: none;
+  border-radius: 20px;
+  padding: 10px 20px;
+  cursor: pointer;
+  font-size: 1em;
+  transition: background-color 0.2s ease;
+}
+
+.send-button:hover {
+  background-color: #218838;
+}
+
+/* רספונסיביות למסכים קטנים יותר */
+@media (max-width: 600px) {
+  .App {
+    width: 100%;
+    height: 100vh;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .chat-container {
+    padding: 10px;
+  }
+
+  .message-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .username-input,
+  .message-input {
+    margin-right: 0;
+    margin-bottom: 10px;
+    border-radius: 8px; /* פינות פחות מעוגלות בגלל צורת הטופס */
+  }
+
+  .send-button {
+    border-radius: 8px;
+  }
+}

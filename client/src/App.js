@@ -1,85 +1,110 @@
-﻿import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
 import axios from 'axios';
-import './App.css'; // ניצור קובץ CSS בהמשך
-
-const socket = io('http://localhost:5000'); // כתובת שרת הבקאנד
+import './App.css'; // חשוב לוודא שזה מצביע לקובץ CSS הנכון
 
 function App() {
-    const [messages, setMessages] = useState([]);
-    const [newMessage, setNewMessage] = useState('');
-    const [username, setUsername] = useState('Anonymous'); // שם משתמש ברירת מחדל
+  const [messages, setMessages] = useState([]);
+  const [messageInput, setMessageInput] = useState('');
+  const [username, setUsername] = useState('');
+  const messagesEndRef = useRef(null);
 
-    useEffect(() => {
-        // טעינת הודעות קודמות מהשרת
-        axios.get('http://localhost:5000/messages')
-            .then(response => {
-                setMessages(response.data);
-            })
-            .catch(error => {
-                console.error('Error fetching messages:', error);
-            });
+  // הגדרת URL של הבקאנד באופן דינמי
+  // אם משתנה הסביבה REACT_APP_BACKEND_URL קיים (ב-Render), נשתמש בו.
+  // אחרת (בפיתוח מקומי), נחזור ל-localhost:5000.
+  const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5000';
 
-        // האזנה להודעות חדשות מהשרת דרך Socket.IO
-        socket.on('chat message', (msg) => {
-            setMessages((prevMessages) => [...prevMessages, msg]);
-        });
+  // יצירת חיבור Socket.IO
+  const socket = io(backendUrl);
 
-        // ניקוי בעת התנתקות
-        return () => {
-            socket.off('chat message');
-        };
-    }, []);
+  useEffect(() => {
+    // טעינת היסטוריית הודעות מהשרת REST API
+    axios.get(`${backendUrl}/messages`)
+      .then(response => {
+        setMessages(response.data);
+      })
+      .catch(error => {
+        console.error('Error fetching messages:', error);
+      });
 
-    const sendMessage = (e) => {
-        e.preventDefault();
-        if (newMessage.trim()) {
-            socket.emit('chat message', { username, message: newMessage });
-            setNewMessage('');
-        }
+    // האזנה להודעות חדשות מ-Socket.IO
+    socket.on('chat message', (msg) => {
+      setMessages((prevMessages) => [...prevMessages, msg]);
+    });
+
+    // האזנה להיסטוריית הודעות שהשרת שולח בהתחברות (בנוסף ל-REST API)
+    socket.on('history', (historyMessages) => {
+      // אם אנחנו רוצים לאחד את ההיסטוריה מה-DB המרוחק עם זו שב-Socket.IO
+      // עבור הדמו הזה, נסתמך בעיקר על ה-REST API לטעינה ראשונית.
+      // אם השרת In-Memory, ה-history הזה יהיה ריק בכל מקרה.
+      // setMessages((prevMessages) => [...prevMessages, ...historyMessages]);
+    });
+
+    // ניקוי כאשר הקומפוננטה נטענת מחדש או נעלמת
+    return () => {
+      socket.off('chat message');
+      socket.off('history');
+      socket.disconnect(); // ניתוק מהסוקט כאשר הקומפוננטה עוזבת
     };
+  }, [backendUrl]); // הוספת backendUrl כתלות כדי שהאפקט יופעל מחדש אם ה-URL משתנה (לא צפוי, אבל מומלץ)
 
-    return (
-        <div className="chat-container">
-            <div className="chat-sidebar">
-                <h3>משתמשים (דוגמה)</h3>
-                <ul>
-                    <li>{username}</li>
-                    {/* כאן אפשר להוסיף רשימת משתמשים מחוברים בעתיד */}
-                </ul>
+
+  // גלילה אוטומטית לתחתית הצ'אט
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const handleSendMessage = (e) => {
+    e.preventDefault();
+    if (messageInput.trim() && username.trim()) {
+      const messageData = {
+        username: username,
+        message: messageInput.trim(),
+      };
+      socket.emit('chat message', messageData);
+      setMessageInput('');
+    } else {
+      alert('Please enter your username and a message.');
+    }
+  };
+
+  return (
+    <div className="App">
+      <header className="App-header">
+        <h1>Real-time Chat</h1>
+      </header>
+      <div className="chat-container">
+        <div className="messages-list">
+          {messages.map((msg, index) => (
+            <div key={index} className={`message ${msg.username === username ? 'my-message' : ''}`}>
+              <span className="username">{msg.username}:</span> {msg.message}
+              <span className="timestamp">{new Date(msg.timestamp).toLocaleTimeString()}</span>
             </div>
-            <div className="chat-main">
-                <h1>צ'אט פשוט</h1>
-                <div className="messages-list">
-                    {messages.map((msg) => (
-                        <div key={msg.id} className="message-item">
-                            <strong>{msg.username}:</strong> {msg.message}
-                            <span className="message-timestamp">
-                                {new Date(msg.timestamp).toLocaleTimeString()}
-                            </span>
-                        </div>
-                    ))}
-                </div>
-                <form onSubmit={sendMessage} className="message-form">
-                    <input
-                        type="text"
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
-                        placeholder="שם משתמש"
-                        className="username-input"
-                    />
-                    <input
-                        type="text"
-                        value={newMessage}
-                        onChange={(e) => setNewMessage(e.target.value)}
-                        placeholder="הקלד הודעה..."
-                        className="message-input"
-                    />
-                    <button type="submit" className="send-button">שלח</button>
-                </form>
-            </div>
+          ))}
+          <div ref={messagesEndRef} />
         </div>
-    );
+        <form onSubmit={handleSendMessage} className="message-form">
+          <input
+            type="text"
+            placeholder="Your username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            className="username-input"
+            required
+          />
+          <input
+            type="text"
+            placeholder="Type a message..."
+            value={messageInput}
+            onChange={(e) => setMessageInput(e.target.value)}
+            className="message-input"
+            required
+          />
+          <button type="submit" className="send-button">Send</button>
+        </form>
+      </div>
+    </div>
+  );
 }
 
 export default App;
