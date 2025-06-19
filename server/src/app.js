@@ -6,77 +6,102 @@ const cors = require('cors');
 
 const app = express();
 const server = http.createServer(app);
+
+// הגדרת CORS לאפשר גישה מכל מקום (לצורך הדגמה)
+app.use(cors({
+    origin: '*', // מאפשר לכל דומיין לגשת
+    methods: ['GET', 'POST'], // מתודות מותרות
+    allowedHeaders: ['Content-Type'] // כותרות מותרות
+}));
+
+// הגדרת ה-CORS עבור Socket.IO
 const io = socketIo(server, {
-    // הגדרות CORS מאפשרות לפרונטאנד (שפועל על פורט 3000) לתקשר עם הבקאנד (פורט 5000)
     cors: {
-        origin: "http://localhost:3000",
-        methods: ["GET", "POST"]
+        origin: '*', // מאפשר לכל דומיין להתחבר ל-Socket.IO
+        methods: ['GET', 'POST']
     }
 });
 
-const DB_PATH = './database.sqlite'; // הנתיב לקובץ בסיס הנתונים SQLite
+const PORT = process.env.PORT || 5000;
+
+// שימוש בבסיס נתונים בזיכרון - לא יישמר בין הפעלות השרת ב-Render
+const DB_PATH = ':memory:'; 
 const db = new sqlite3.Database(DB_PATH, (err) => {
     if (err) {
-        console.error(err.message);
+        console.error('Error connecting to database:', err.message);
+    } else {
+        console.log('Connected to the in-memory SQLite database.');
+        db.run(`CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT,
+            message TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`, (createErr) => {
+            if (createErr) {
+                console.error('Error creating messages table:', createErr.message);
+            } else {
+                console.log('Messages table created or already exists (in-memory).');
+                // הוספת הודעת בדיקה אחת עם התחלת השרת (אופציונלי)
+                // db.run(`INSERT INTO messages (username, message) VALUES (?, ?)`, ['System', 'Welcome to the chat!'], (insertErr) => {
+                //     if (insertErr) {
+                //         console.error('Error inserting initial message:', insertErr.message);
+                //     }
+                // });
+            }
+        });
     }
-    console.log('Connected to the SQLite database.');
-
-    // יצירת טבלת 'messages' אם היא לא קיימת
-    // שימו לב לגרשיים ההפוכים (backticks) סביב מחרוזת ה-SQL. זה חשוב!
-    db.run(`CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT,
-        message TEXT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
 });
 
-// שימוש ב-middleware של CORS
-app.use(cors());
-// שימוש ב-middleware של Express לניתוח גוף בקשות בפורמט JSON
 app.use(express.json());
 
-// נתיב API מסוג GET: /messages
-// מחזיר את כל ההודעות הקודמות מבסיס הנתונים, ממוינות לפי זמן יצירה
+// מסלול לקבלת הודעות היסטוריות
 app.get('/messages', (req, res) => {
     db.all('SELECT * FROM messages ORDER BY timestamp ASC', [], (err, rows) => {
         if (err) {
             res.status(500).json({ error: err.message });
             return;
         }
-        res.json(rows); // שולח את ההודעות כמענה בפורמט JSON
+        res.json(rows);
     });
 });
 
-// הגדרת טיפול באירועי חיבור וניתוק של Socket.IO
 io.on('connection', (socket) => {
-    console.log('A user connected'); // נדפיס לקונסול של השרת כשמשתמש מתחבר
+    console.log('a user connected');
 
-    // מאזין לאירוע 'chat message' שנשלח מהלקוח
+    // שליחת הודעות קיימות למשתמש החדש (במקרה של זיכרון, זה יהיה ריק בהתחלה)
+    db.all('SELECT * FROM messages ORDER BY timestamp ASC', [], (err, rows) => {
+        if (err) {
+            console.error('Error fetching messages for new user:', err.message);
+            return;
+        }
+        socket.emit('history', rows);
+    });
+
     socket.on('chat message', (msg) => {
+        console.log('message: ' + msg.message);
         const { username, message } = msg;
-        // מכניס את ההודעה החדשה לבסיס הנתונים
-        db.run('INSERT INTO messages (username, message) VALUES (?, ?)', [username, message], function(err) {
+
+        // שמירת ההודעה בבסיס הנתונים
+        db.run(`INSERT INTO messages (username, message) VALUES (?, ?)`, [username, message], function(err) {
             if (err) {
-                console.error(err.message);
+                console.error('Error inserting message:', err.message);
                 return;
             }
-            // שולח את ההודעה החדשה (כולל ה-ID שנוצר אוטומטית וזמן יצירה)
-            // לכל הלקוחות המחוברים דרך Socket.IO, כדי שיתעדכנו בזמן אמת
-            io.emit('chat message', { id: this.lastID, username, message, timestamp: new Date().toISOString() });
+            // שליחת ההודעה לכל הלקוחות המחוברים, כולל ה-id וה-timestamp מה-DB
+            io.emit('chat message', {
+                id: this.lastID, // ID שנוצר על ידי SQLite
+                username,
+                message,
+                timestamp: new Date().toISOString() // השתמש ב-ISO string לפורמט אחיד
+            });
         });
     });
 
-    // מטפל בהתנתקות של משתמש
     socket.on('disconnect', () => {
-        console.log('User disconnected'); // נדפיס לקונסול של השרת כשמשתמש מתנתק
+        console.log('user disconnected');
     });
 });
 
-// הגדרת פורט לשרת (ברירת מחדל 5000)
-const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-    // הודעה בקונסול השרת עם הפורט בו הוא פועל
-    // שימו לב שוב לגרשיים ההפוכים (template literal) כאן
     console.log(`Server running on port ${PORT}`);
 });
